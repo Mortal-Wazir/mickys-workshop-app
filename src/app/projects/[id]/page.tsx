@@ -6,6 +6,7 @@ import {
   applyProjectRoomDraft,
   createProjectRoom,
   inviteCollaborator,
+  publishRoomCodeFiles,
   requestProjectMerge,
   reviewProjectMerge,
   saveProjectRoomDraft,
@@ -18,12 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
 import { PageHeader } from "@/components/layout/page-header";
+import { CodeWorkspace } from "@/components/projects/code-workspace";
 import { createClient, getUser } from "@/lib/supabase/server";
 import type { Project, ProjectChangeRequest, ProjectRoom, ProjectTask, TaskStatus } from "@/lib/types";
 
 type CommentRow = { id: string; body: string; profiles?: { full_name: string | null; email: string | null } | null };
 type FileRow = { id: string; file_name: string; file_type: string };
 type CollaboratorRow = { id: string; email: string };
+type CodeFileRow = { id: string; project_id: string; room_id: string | null; file_path: string; language: string; content: string; updated_at: string };
 type RoomRow = ProjectRoom & {
   participants?: { id: string; email: string | null; profiles?: { full_name: string | null; email: string | null } | null }[] | null;
 };
@@ -48,19 +51,22 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   const supabase = await createClient();
   const user = await getUser();
-  const [{ data: project }, { data: tasks }, { data: comments }, { data: files }, { data: collaborators }, { data: rooms }] = await Promise.all([
+  const [{ data: project }, { data: tasks }, { data: comments }, { data: files }, { data: collaborators }, { data: rooms }, { data: codeFiles }] = await Promise.all([
     supabase.from("projects").select("*, profiles(full_name, email)").eq("id", id).single(),
     supabase.from("tasks").select("*").eq("project_id", id).order("created_at"),
     supabase.from("comments").select("*, profiles(full_name, email)").eq("project_id", id).order("created_at", { ascending: false }),
     supabase.from("project_files").select("*").eq("project_id", id).order("created_at", { ascending: false }),
     supabase.from("project_collaborators").select("*").eq("project_id", id),
     supabase.from("project_rooms").select("*, participants:project_room_participants(id, email, profiles(full_name, email))").eq("project_id", id).order("created_at", { ascending: false }),
+    supabase.from("project_code_files").select("*").eq("project_id", id).order("file_path"),
   ]);
 
   if (!project) notFound();
   const currentProject = project as Project;
   const taskItems = (tasks as ProjectTask[] | null) ?? [];
   const projectRooms = (rooms as RoomRow[] | null) ?? [];
+  const workspaceFiles = (codeFiles as CodeFileRow[] | null) ?? [];
+  const permanentCodeFiles = workspaceFiles.filter((file) => !file.room_id);
   const activeRooms = projectRooms.filter((room) => room.status === "active");
   const isOwner = currentProject.owner_id === user?.id;
   const isCopiedProject = Boolean(currentProject.source_project_id);
@@ -186,6 +192,21 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             </CardContent>
           </Card>
 
+          <CodeWorkspace projectId={id} roomId={null} files={permanentCodeFiles} title="Project codebase" mode="permanent" />
+
+          {activeRooms.map((room) => (
+            <CodeWorkspace
+              key={`workspace-${room.id}`}
+              projectId={id}
+              roomId={room.id}
+              files={workspaceFiles.filter((file) => file.room_id === room.id)}
+              title={`Room ${room.invite_code} coding environment`}
+              mode="room"
+              canPublish={isOwner}
+              publishAction={publishRoomCodeFiles}
+            />
+          ))}
+
           <Card>
             <CardHeader><CardTitle>Task board</CardTitle></CardHeader>
             <CardContent>
@@ -224,3 +245,4 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
     </>
   );
 }
+

@@ -559,6 +559,152 @@ export async function uploadRbiNote(formData: FormData) {
   if (error) throw new Error(error.message);
   revalidatePath("/private/rbi");
 }
+function codeLanguageFromPath(filePath: string) {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".html")) return "html";
+  if (lower.endsWith(".css")) return "css";
+  if (lower.endsWith(".js") || lower.endsWith(".jsx")) return "javascript";
+  if (lower.endsWith(".py")) return "python";
+  if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
+  if (lower.endsWith(".json")) return "json";
+  if (lower.endsWith(".md")) return "markdown";
+  return "text";
+}
+
+function starterCodeFor(filePath: string) {
+  const language = codeLanguageFromPath(filePath);
+  if (language === "html") return "<!doctype html>\n<html>\n  <head>\n    <meta charset=\"utf-8\" />\n    <title>Micky's Workshop Preview</title>\n    <link rel=\"stylesheet\" href=\"styles.css\" />\n  </head>\n  <body>\n    <main id=\"app\">\n      <h1>Hello from Micky's Workshop</h1>\n      <p>Edit index.html, styles.css, and script.js to preview your idea.</p>\n    </main>\n    <script src=\"script.js\"></script>\n  </body>\n</html>\n";
+  if (language === "css") return "body {\n  margin: 0;\n  font-family: system-ui, sans-serif;\n  background: #f8fafc;\n  color: #0f172a;\n}\n\nmain {\n  max-width: 720px;\n  margin: 64px auto;\n  padding: 32px;\n  border-radius: 16px;\n  background: white;\n  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);\n}\n";
+  if (language === "javascript") return "const app = document.querySelector('#app');\nconsole.log('Micky\\'s Workshop preview is running.');\n";
+  if (language === "python") return "def main():\n    print('Hello from Micky\\'s Workshop')\n\nif __name__ == '__main__':\n    main()\n";
+  if (language === "typescript") return "export function helloWorkshop(name: string) {\n  return `Hello, ${name}`;\n}\n";
+  return "";
+}
+
+export async function createProjectCodeFile(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const projectId = text(formData, "project_id");
+  const roomId = text(formData, "room_id");
+  const filePath = text(formData, "file_path")?.replace(/^\/+/, "");
+  if (!projectId || !filePath) return;
+
+  const language = codeLanguageFromPath(filePath);
+  const { error } = await supabase.from("project_code_files").insert({
+    project_id: projectId,
+    room_id: roomId,
+    created_by: user.id,
+    file_path: filePath,
+    language,
+    content: starterCodeFor(filePath),
+  });
+
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function saveProjectCodeFile(formData: FormData) {
+  const { supabase } = await requireUser();
+  const projectId = text(formData, "project_id");
+  const fileId = text(formData, "file_id");
+  const content = formData.get("content");
+  if (!projectId || !fileId || typeof content !== "string") return;
+
+  const { error } = await supabase
+    .from("project_code_files")
+    .update({ content, updated_at: new Date().toISOString() })
+    .eq("id", fileId);
+
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function deleteProjectCodeFile(formData: FormData) {
+  const { supabase } = await requireUser();
+  const projectId = text(formData, "project_id");
+  const fileId = text(formData, "file_id");
+  if (!projectId || !fileId) return;
+
+  const { error } = await supabase.from("project_code_files").delete().eq("id", fileId);
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function publishRoomCodeFiles(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const projectId = text(formData, "project_id");
+  const roomId = text(formData, "room_id");
+  if (!projectId || !roomId) return;
+
+  const { data: project } = await supabase.from("projects").select("owner_id").eq("id", projectId).single();
+  if (project?.owner_id !== user.id) throw new Error("Only the owner can publish room code permanently.");
+
+  const { data: draftFiles, error } = await supabase
+    .from("project_code_files")
+    .select("file_path, language, content")
+    .eq("project_id", projectId)
+    .eq("room_id", roomId);
+
+  if (error) throw new Error(error.message);
+
+  for (const file of draftFiles ?? []) {
+    const { data: existing } = await supabase
+      .from("project_code_files")
+      .select("id")
+      .eq("project_id", projectId)
+      .is("room_id", null)
+      .eq("file_path", file.file_path)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase.from("project_code_files").update({
+        language: file.language,
+        content: file.content,
+        updated_at: new Date().toISOString(),
+      }).eq("id", existing.id);
+    } else {
+      await supabase.from("project_code_files").insert({
+        project_id: projectId,
+        room_id: null,
+        created_by: user.id,
+        file_path: file.file_path,
+        language: file.language,
+        content: file.content,
+      });
+    }
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function seedRoomStarterFiles(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const projectId = text(formData, "project_id");
+  const roomId = text(formData, "room_id");
+  if (!projectId || !roomId) return;
+
+  const starterFiles = ["index.html", "styles.css", "script.js"];
+  for (const filePath of starterFiles) {
+    const { data: existing } = await supabase
+      .from("project_code_files")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("room_id", roomId)
+      .eq("file_path", filePath)
+      .maybeSingle();
+    if (existing) continue;
+
+    await supabase.from("project_code_files").insert({
+      project_id: projectId,
+      room_id: roomId,
+      created_by: user.id,
+      file_path: filePath,
+      language: codeLanguageFromPath(filePath),
+      content: starterCodeFor(filePath),
+    });
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+}
 export async function createSubject(formData: FormData) {
   const { supabase, user } = await requireUser();
   await supabase.from("subjects").insert({
@@ -739,6 +885,7 @@ export async function shareTechNews(formData: FormData) {
   revalidatePath("/tech-news");
   techNewsMessage("message", "News summary published successfully.");
 }
+
 
 
 
