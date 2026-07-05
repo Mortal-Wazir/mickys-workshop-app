@@ -390,6 +390,175 @@ export async function uploadProjectFile(formData: FormData) {
   revalidatePath(`/projects/${projectId}`);
 }
 
+export async function updateProjectDetails(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const projectId = text(formData, "project_id");
+  if (!projectId) return;
+
+  const { error } = await supabase
+    .from("projects")
+    .update({
+      title: text(formData, "title"),
+      description: text(formData, "description"),
+      tech_stack: text(formData, "tech_stack"),
+      github_link: text(formData, "github_link"),
+      demo_link: text(formData, "demo_link"),
+      visibility: text(formData, "visibility") === "public" ? "public" : "private",
+    })
+    .eq("id", projectId)
+    .eq("owner_id", user.id);
+
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+}
+
+export async function createProjectRoom(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const projectId = text(formData, "project_id");
+  if (!projectId) return;
+
+  const { data: project, error: projectError } = await supabase
+    .from("projects")
+    .select("id, owner_id, title, description, tech_stack, github_link, demo_link")
+    .eq("id", projectId)
+    .single();
+
+  if (projectError || !project) throw new Error(projectError?.message || "Project not found.");
+  if (project.owner_id !== user.id) throw new Error("Only the project owner can create collaboration rooms.");
+
+  const inviteCode = crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
+  const { error } = await supabase.from("project_rooms").insert({
+    project_id: projectId,
+    owner_id: user.id,
+    invite_code: inviteCode,
+    draft_title: project.title,
+    draft_description: project.description,
+    draft_tech_stack: project.tech_stack,
+    draft_github_link: project.github_link,
+    draft_demo_link: project.demo_link,
+    draft_notes: "",
+    status: "active",
+  });
+
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function joinProjectRoom(formData: FormData) {
+  const { user } = await requireUser();
+  const inviteCode = text(formData, "invite_code")?.toUpperCase();
+  if (!inviteCode) return;
+
+  const admin = createAdminClient();
+  const { data: room, error } = await admin
+    .from("project_rooms")
+    .select("id, project_id")
+    .eq("invite_code", inviteCode)
+    .eq("status", "active")
+    .single();
+
+  if (error || !room) throw new Error("Room code is invalid or closed.");
+
+  await admin.from("project_room_participants").upsert({
+    room_id: room.id,
+    user_id: user.id,
+    email: user.email,
+  }, { onConflict: "room_id,user_id" });
+
+  if (user.email) {
+    await admin.from("project_collaborators").upsert({
+      project_id: room.project_id,
+      user_id: user.id,
+      email: user.email,
+    }, { onConflict: "project_id,email" });
+  }
+
+  redirect(`/projects/${room.project_id}`);
+}
+
+export async function saveProjectRoomDraft(formData: FormData) {
+  const { supabase } = await requireUser();
+  const roomId = text(formData, "room_id");
+  const projectId = text(formData, "project_id");
+  if (!roomId || !projectId) return;
+
+  const { error } = await supabase
+    .from("project_rooms")
+    .update({
+      draft_title: text(formData, "draft_title"),
+      draft_description: text(formData, "draft_description"),
+      draft_tech_stack: text(formData, "draft_tech_stack"),
+      draft_github_link: text(formData, "draft_github_link"),
+      draft_demo_link: text(formData, "draft_demo_link"),
+      draft_notes: text(formData, "draft_notes"),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", roomId);
+
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function applyProjectRoomDraft(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const roomId = text(formData, "room_id");
+  const projectId = text(formData, "project_id");
+  if (!roomId || !projectId) return;
+
+  const { data: room, error } = await supabase
+    .from("project_rooms")
+    .select("*")
+    .eq("id", roomId)
+    .eq("owner_id", user.id)
+    .single();
+
+  if (error || !room) throw new Error(error?.message || "Only the room owner can apply draft changes.");
+
+  const { error: updateError } = await supabase
+    .from("projects")
+    .update({
+      title: room.draft_title,
+      description: room.draft_description,
+      tech_stack: room.draft_tech_stack,
+      github_link: room.draft_github_link,
+      demo_link: room.draft_demo_link,
+    })
+    .eq("id", projectId)
+    .eq("owner_id", user.id);
+
+  if (updateError) throw new Error(updateError.message);
+  await supabase.from("project_rooms").update({ status: "closed", updated_at: new Date().toISOString() }).eq("id", roomId);
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath("/projects");
+}
+
+export async function uploadRbiNote(formData: FormData) {
+  const { supabase, user } = await requireUser();
+  const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+  if (profile?.role !== "owner") throw new Error("Only owner can upload RBI notes.");
+
+  const file = formData.get("file");
+  const folder = text(formData, "folder") || "ESI";
+  const title = text(formData, "title");
+  if (!(file instanceof File)) return;
+
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const path = `${user.id}/rbi/${Date.now()}-${safeName}`;
+  const { error: uploadError } = await supabase.storage.from("rbi-files").upload(path, file, { upsert: false });
+  if (uploadError) throw new Error(uploadError.message);
+
+  const { error } = await supabase.from("rbi_notes").insert({
+    owner_id: user.id,
+    folder,
+    title: title || file.name,
+    file_path: path,
+    extracted_text: null,
+  });
+
+  if (error) throw new Error(error.message);
+  revalidatePath("/private/rbi");
+}
 export async function createSubject(formData: FormData) {
   const { supabase, user } = await requireUser();
   await supabase.from("subjects").insert({
@@ -570,6 +739,8 @@ export async function shareTechNews(formData: FormData) {
   revalidatePath("/tech-news");
   techNewsMessage("message", "News summary published successfully.");
 }
+
+
 
 
 

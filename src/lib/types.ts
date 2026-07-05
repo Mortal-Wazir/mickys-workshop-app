@@ -51,3 +51,27 @@ export type Subject = {
   name: string;
   semester: string | null;
 };
+export type ProjectRoom = {
+  id: string;
+  project_id: string;
+  owner_id: string;
+  invite_code: string;
+  draft_title: string | null;
+  draft_description: string | null;
+  draft_tech_stack: string | null;
+  draft_github_link: string | null;
+  draft_demo_link: string | null;
+  draft_notes: string | null;
+  status: "active" | "closed";
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectRoomParticipant = {
+  id: string;
+  room_id: string;
+  user_id: string | null;
+  email: string | null;
+  profiles?: { full_name: string | null; email: string | null } | null;
+};
+

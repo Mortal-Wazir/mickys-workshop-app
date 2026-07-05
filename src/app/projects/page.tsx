@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { ArrowUpRight, Copy, ExternalLink, Globe2, Lock, Plus, Sparkles, Users } from "lucide-react";
-import { copyPublicProject } from "@/app/actions";
+import { copyPublicProject, joinProjectRoom } from "@/app/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createClient, getUser } from "@/lib/supabase/server";
 import type { Project } from "@/lib/types";
@@ -60,6 +61,17 @@ export default async function ProjectsPage() {
       ) : null}
 
       {error && !isMissingTableError(error.message) ? <p className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error.message}</p> : null}
+
+      <Card className="border-violet-100 bg-gradient-to-br from-violet-50 to-white">
+        <CardHeader><CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-violet-600" /> Join a live project room</CardTitle></CardHeader>
+        <CardContent>
+          <form action={joinProjectRoom} className="grid gap-3 md:grid-cols-[1fr_auto]">
+            <Input name="invite_code" required placeholder="Enter room code, e.g. A1B2C3D4" className="font-mono uppercase tracking-widest" />
+            <Button>Join room</Button>
+          </form>
+          <p className="mt-3 text-xs leading-5 text-slate-500">Room changes are temporary drafts. Only the project owner can apply them permanently.</p>
+        </CardContent>
+      </Card>
 
       <section className="rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm shadow-emerald-100/60">
         <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -128,3 +140,4 @@ export default async function ProjectsPage() {
     </div>
   );
 }
+
